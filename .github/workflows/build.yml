@@ -52,7 +52,6 @@ jobs:
           CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
           EOF
 
-          # Remove conflicting disabled lines
           sed -i '/# CONFIG_MEMCG is not set/d' $FOGCONFIG
           sed -i '/# CONFIG_MEMCG_SWAP is not set/d' $FOGCONFIG
 
@@ -63,11 +62,31 @@ jobs:
           export KBUILD_BUILD_USER=nobody
           export KBUILD_BUILD_HOST=android-build
 
+          # Fix assembler version check
+          export LLVM_IAS=1
+          export AS=llvm-as
+
           mkdir -p out
           make O=out ARCH=arm64 vendor/spes-perf_defconfig \
-            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config
+            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config \
+            CC=clang \
+            AS=llvm-as \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip
 
           make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang \
+            AS=llvm-as \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
             LLVM=1 LLVM_IAS=1 \
             Image.gz dtb.img dtbo.img 2>&1 | tee build.log || exit $?
 
