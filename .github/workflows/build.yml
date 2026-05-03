@@ -10,65 +10,64 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Install dependencies (system Clang + LLD)
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential bc bison flex \
             libssl-dev libelf-dev git curl \
-            zip python3 ccache \
-            clang lld
+            zip python3 ccache
 
-      - name: Add namespace configs to fog.config
+      - name: Download toolchain
         run: |
-          mkdir -p arch/arm64/configs/vendor/xiaomi
-          FOGCONFIG="arch/arm64/configs/vendor/xiaomi/fog.config"
-          cat >> $FOGCONFIG << 'EOF'
+          mkdir -p tc
+          cd tc
+          git clone --depth=1 -b 14 \
+            https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone \
+            clang
 
-          # Namespaces for LXC/container support
-          CONFIG_PID_NS=y
-          CONFIG_USER_NS=y
-          CONFIG_IPC_NS=y
-          CONFIG_CGROUP_PIDS=y
-          CONFIG_CGROUP_DEVICE=y
-          CONFIG_CGROUP_PERF=y
-          CONFIG_OVERLAY_FS=y
-          CONFIG_SQUASHFS=y
-          CONFIG_SQUASHFS_XZ=y
-          CONFIG_FUSE_FS=y
-          CONFIG_VETH=y
-          CONFIG_TUN=y
-          CONFIG_WIREGUARD=y
-          CONFIG_NF_TABLES=y
-          CONFIG_IP_NF_NAT=y
-          CONFIG_CHECKPOINT_RESTORE=y
-          CONFIG_POSIX_MQUEUE=y
-          CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
-          EOF
-
-          # Remove commented-out lines that might conflict
-          sed -i '/# CONFIG_MEMCG is not set/d' $FOGCONFIG
-          sed -i '/# CONFIG_MEMCG_SWAP is not set/d' $FOGCONFIG
+      - name: Add namespace configs and fix CPU masks
+        run: |
+          DEFCONFIG="arch/arm64/configs/vendor/fog-perf_defconfig"
+          sed -i '/CONFIG_LITTLE_CPU_MASK/d' $DEFCONFIG
+          sed -i '/CONFIG_BIG_CPU_MASK/d' $DEFCONFIG
+          echo 'CONFIG_LITTLE_CPU_MASK=63' >> $DEFCONFIG
+          echo 'CONFIG_BIG_CPU_MASK=192' >> $DEFCONFIG
+          echo 'CONFIG_PID_NS=y' >> $DEFCONFIG
+          echo 'CONFIG_USER_NS=y' >> $DEFCONFIG
+          echo 'CONFIG_IPC_NS=y' >> $DEFCONFIG
+          echo 'CONFIG_CGROUP_PIDS=y' >> $DEFCONFIG
+          echo 'CONFIG_CGROUP_DEVICE=y' >> $DEFCONFIG
+          echo 'CONFIG_CGROUP_PERF=y' >> $DEFCONFIG
+          echo 'CONFIG_OVERLAY_FS=y' >> $DEFCONFIG
+          echo 'CONFIG_SQUASHFS=y' >> $DEFCONFIG
+          echo 'CONFIG_SQUASHFS_XZ=y' >> $DEFCONFIG
+          echo 'CONFIG_FUSE_FS=y' >> $DEFCONFIG
+          echo 'CONFIG_VETH=y' >> $DEFCONFIG
+          echo 'CONFIG_TUN=y' >> $DEFCONFIG
+          echo 'CONFIG_WIREGUARD=y' >> $DEFCONFIG
+          echo 'CONFIG_NF_TABLES=y' >> $DEFCONFIG
+          echo 'CONFIG_IP_NF_NAT=y' >> $DEFCONFIG
+          echo 'CONFIG_CHECKPOINT_RESTORE=y' >> $DEFCONFIG
+          echo 'CONFIG_POSIX_MQUEUE=y' >> $DEFCONFIG
+          echo 'CONFIG_DEVPTS_MULTIPLE_INSTANCES=y' >> $DEFCONFIG
 
       - name: Build kernel
         run: |
           export ARCH=arm64
+          export PATH="$(pwd)/tc/clang/bin:$PATH"
           export KBUILD_BUILD_USER=nobody
           export KBUILD_BUILD_HOST=android-build
-          export LLVM=1
-          export LLVM_IAS=1
-
           mkdir -p out
-
-          # Use your extracted fog-perf_defconfig + fog.config overlay
           make O=out ARCH=arm64 vendor/fog-perf_defconfig \
-            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config
-
-          # Resolve any new symbols with defaults
+            CC=clang AS=llvm-as LD=ld.lld AR=llvm-ar \
+            NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip
           make O=out ARCH=arm64 olddefconfig
-
-          # Build only the kernel image (no dtb.img target)
-          make -j$(nproc) O=out ARCH=arm64 \
+          make -j$(nproc --all) O=out ARCH=arm64 \
+            CC=clang AS=llvm-as LD=ld.lld AR=llvm-ar \
+            NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip \
             LLVM=1 LLVM_IAS=1 \
             Image.gz 2>&1 | tee build.log || exit $?
 
@@ -79,39 +78,28 @@ jobs:
             cat build.log | tail -50
             exit 1
           fi
-
-          git clone --depth=1 \
-            https://github.com/CHRISL7/AnyKernel3 AnyKernel3
-
+          git clone --depth=1 https://github.com/CHRISL7/AnyKernel3 AnyKernel3
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
-          # dtb/dtbo may not exist; skip without error
           cp out/arch/arm64/boot/dtb.img AnyKernel3/ 2>/dev/null || true
           cp out/arch/arm64/boot/dtbo.img AnyKernel3/ 2>/dev/null || true
-
-          cat > AnyKernel3/anykernel.sh << 'EOF'
-          properties() { '
-          kernel.string=Fog Custom Kernel with Namespace Support
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=fog
-          device.name2=wind
-          device.name3=rain
-          '; }
-          block=/dev/block/bootdevice/by-name/boot;
-          is_slot_device=1;
-          ramdisk_compression=auto;
-          . tools/ak3-core.sh;
-          split_boot;
-          flash_boot;
-          EOF
-
+          echo "kernel.string=Fog Custom Kernel" > AnyKernel3/anykernel.sh
+          echo "do.devicecheck=1" >> AnyKernel3/anykernel.sh
+          echo "do.modules=0" >> AnyKernel3/anykernel.sh
+          echo "do.systemless=1" >> AnyKernel3/anykernel.sh
+          echo "do.cleanup=1" >> AnyKernel3/anykernel.sh
+          echo "do.cleanuponabort=0" >> AnyKernel3/anykernel.sh
+          echo "device.name1=fog" >> AnyKernel3/anykernel.sh
+          echo "device.name2=wind" >> AnyKernel3/anykernel.sh
+          echo "device.name3=rain" >> AnyKernel3/anykernel.sh
+          echo "block=/dev/block/bootdevice/by-name/boot" >> AnyKernel3/anykernel.sh
+          echo "is_slot_device=1" >> AnyKernel3/anykernel.sh
+          echo "ramdisk_compression=auto" >> AnyKernel3/anykernel.sh
+          echo ". tools/ak3-core.sh" >> AnyKernel3/anykernel.sh
+          echo "split_boot" >> AnyKernel3/anykernel.sh
+          echo "flash_boot" >> AnyKernel3/anykernel.sh
           cd AnyKernel3
           zip -r9 ../Fog-Namespace-Kernel.zip * \
-            --exclude=".git/*" \
-            --exclude="*.zip"
+            --exclude=".git/*" --exclude="*.zip"
 
       - name: Upload build log on failure
         if: failure()
