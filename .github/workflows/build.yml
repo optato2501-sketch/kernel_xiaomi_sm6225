@@ -10,19 +10,18 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Install dependencies (including system Clang/LLD)
+      - name: Install dependencies (system Clang + LLD)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential bc bison flex \
             libssl-dev libelf-dev git curl \
             zip python3 ccache \
-            clang lld          # ✅ system toolchain – stable & complete
-
-      # ❌ REMOVED the broken "Download toolchain" step entirely
+            clang lld
 
       - name: Add namespace configs to fog.config
         run: |
+          mkdir -p arch/arm64/configs/vendor/xiaomi
           FOGCONFIG="arch/arm64/configs/vendor/xiaomi/fog.config"
           cat >> $FOGCONFIG << 'EOF'
 
@@ -47,6 +46,7 @@ jobs:
           CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
           EOF
 
+          # Remove commented-out lines that might conflict
           sed -i '/# CONFIG_MEMCG is not set/d' $FOGCONFIG
           sed -i '/# CONFIG_MEMCG_SWAP is not set/d' $FOGCONFIG
 
@@ -55,20 +55,22 @@ jobs:
           export ARCH=arm64
           export KBUILD_BUILD_USER=nobody
           export KBUILD_BUILD_HOST=android-build
-
-          # No custom PATH needed – system clang/lld are already in PATH
           export LLVM=1
-          export LLVM_IAS=1          # fixes assembler version check automatically
+          export LLVM_IAS=1
 
           mkdir -p out
 
-          # Use KCONFIG_ALLCONFIG to merge your fog.config on top of the vendor defconfig
+          # Use your extracted fog-perf_defconfig + fog.config overlay
           make O=out ARCH=arm64 vendor/fog-perf_defconfig \
             KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config
 
+          # Resolve any new symbols with defaults
+          make O=out ARCH=arm64 olddefconfig
+
+          # Build only the kernel image (no dtb.img target)
           make -j$(nproc) O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
-            Image.gz dtb.img dtbo.img 2>&1 | tee build.log || exit $?
+            Image.gz 2>&1 | tee build.log || exit $?
 
       - name: Package kernel
         run: |
@@ -82,6 +84,7 @@ jobs:
             https://github.com/CHRISL7/AnyKernel3 AnyKernel3
 
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          # dtb/dtbo may not exist; skip without error
           cp out/arch/arm64/boot/dtb.img AnyKernel3/ 2>/dev/null || true
           cp out/arch/arm64/boot/dtbo.img AnyKernel3/ 2>/dev/null || true
 
