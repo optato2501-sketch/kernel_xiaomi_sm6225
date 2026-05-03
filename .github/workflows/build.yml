@@ -22,11 +22,12 @@ jobs:
         run: |
           mkdir -p tc/clang
           cd tc/clang
-          wget -q \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android15-release/clang-r547379.tar.gz" \
-            -O clang.tar.gz
-          tar -xzf clang.tar.gz
-          rm clang.tar.gz
+          # Use GitHub mirror instead of googlesource
+          curl -LO "https://github.com/ZyCromerZ/Clang/releases/download/20.0.0git-20250101-release/Clang-20.0.0git-20250101.tar.gz"
+          tar -xzf Clang-20.0.0git-20250101.tar.gz
+          rm Clang-20.0.0git-20250101.tar.gz
+          echo "Clang version:"
+          bin/clang --version
 
       - name: Add namespace configs and fix CPU masks
         run: |
