@@ -1,0 +1,105 @@
+name: Build Fog Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev git curl zip python3
+      
+      - name: Download toolchain
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b android15-release ~/clang
+          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android15-release ~/gcc64
+      
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export PATH="$HOME/clang/clang-r547379/bin:$HOME/gcc64/bin:$PATH"
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # Load base config
+          make O=out ARCH=arm64 vendor/fog_defconfig
+          
+          # Append your required options
+          cat >> out/.config << 'EOF'
+          CONFIG_PID_NS=y
+          CONFIG_USER_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_NET_NS=y
+          CONFIG_UTS_NS=y
+          CONFIG_CGROUP_PIDS=y
+          CONFIG_CGROUP_DEVICE=y
+          CONFIG_CGROUP_HUGETLB=y
+          CONFIG_CGROUP_PERF=y
+          CONFIG_MEMCG_SWAP=y
+          CONFIG_MEMCG_SWAP_ENABLED=y
+          CONFIG_OVERLAY_FS=y
+          CONFIG_SQUASHFS=y
+          CONFIG_SQUASHFS_LZ4=y
+          CONFIG_SQUASHFS_LZO=y
+          CONFIG_SQUASHFS_XZ=y
+          CONFIG_AUFS_FS=y
+          CONFIG_SECCOMP=y
+          CONFIG_SECCOMP_FILTER=y
+          CONFIG_CAPABILITIES=y
+          CONFIG_SECURITY_SELINUX=y
+          CONFIG_VETH=y
+          CONFIG_BRIDGE=y
+          CONFIG_NETFILTER=y
+          CONFIG_NF_TABLES=y
+          CONFIG_IP_NF_IPTABLES=y
+          CONFIG_IP_NF_FILTER=y
+          CONFIG_IP_NF_NAT=y
+          CONFIG_TUN=y
+          CONFIG_WIREGUARD=y
+          CONFIG_BT=y
+          CONFIG_BT_RFCOMM=y
+          CONFIG_BT_HIDP=y
+          CONFIG_BT_HCIBTUSB=y
+          CONFIG_BT_HCIUART=y
+          CONFIG_SND=y
+          CONFIG_SND_USB_AUDIO=y
+          CONFIG_SND_PROC_FS=y
+          CONFIG_USB_OTG=y
+          CONFIG_USB_XHCI_HCD=y
+          CONFIG_USB_EHCI_HCD=y
+          CONFIG_USB_STORAGE=y
+          CONFIG_USB_HID=y
+          CONFIG_HID_GENERIC=y
+          CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
+          CONFIG_FUSE_FS=y
+          CONFIG_INOTIFY_USER=y
+          CONFIG_FANOTIFY=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_CHECKPOINT_RESTORE=y
+          EOF
+          
+          # Resolve dependencies
+          make O=out ARCH=arm64 olddefconfig
+          
+          # Compile
+          make O=out ARCH=arm64 -j$(nproc --all)
+      
+      - name: Package kernel
+        run: |
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git AK3
+          cp out/arch/arm64/boot/Image.gz-dtb AK3/
+          cd AK3
+          zip -r9 ../Fog-Custom.zip *
+      
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fog-Custom-Kernel
+          path: Fog-Custom.zip
+          
