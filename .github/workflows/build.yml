@@ -10,21 +10,16 @@ jobs:
       - name: Checkout kernel source
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (including system Clang/LLD)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential bc bison flex \
             libssl-dev libelf-dev git curl \
-            zip python3 ccache
+            zip python3 ccache \
+            clang lld          # ✅ system toolchain – stable & complete
 
-      - name: Download toolchain
-        run: |
-          mkdir -p tc
-          cd tc
-          git clone --depth=1 -b 14 \
-            https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone \
-            clang-r450784e
+      # ❌ REMOVED the broken "Download toolchain" step entirely
 
       - name: Add namespace configs to fog.config
         run: |
@@ -58,35 +53,20 @@ jobs:
       - name: Build kernel
         run: |
           export ARCH=arm64
-          export PATH="$(pwd)/tc/clang-r450784e/bin:$PATH"
           export KBUILD_BUILD_USER=nobody
           export KBUILD_BUILD_HOST=android-build
 
-          # Fix assembler version check
-          export LLVM_IAS=1
-          export AS=llvm-as
+          # No custom PATH needed – system clang/lld are already in PATH
+          export LLVM=1
+          export LLVM_IAS=1          # fixes assembler version check automatically
 
           mkdir -p out
-          make O=out ARCH=arm64 vendor/fog-perf_defconfig \
-            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config \
-            CC=clang \
-            AS=llvm-as \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip
 
-          make -j$(nproc --all) O=out ARCH=arm64 \
-            CC=clang \
-            AS=llvm-as \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
+          # Use KCONFIG_ALLCONFIG to merge your fog.config on top of the vendor defconfig
+          make O=out ARCH=arm64 vendor/fog-perf_defconfig \
+            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config
+
+          make -j$(nproc) O=out ARCH=arm64 \
             LLVM=1 LLVM_IAS=1 \
             Image.gz dtb.img dtbo.img 2>&1 | tee build.log || exit $?
 
