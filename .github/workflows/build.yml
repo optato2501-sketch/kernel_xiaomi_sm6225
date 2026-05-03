@@ -67,7 +67,7 @@ jobs:
           export AS=llvm-as
 
           mkdir -p out
-          make O=out ARCH=arm64 vendor/spes-perf_defconfig \
+          make O=out ARCH=arm64 vendor/fog-perf_defconfig \
             KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config \
             CC=clang \
             AS=llvm-as \
