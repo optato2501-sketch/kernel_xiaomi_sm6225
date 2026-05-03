@@ -63,7 +63,7 @@ jobs:
           mkdir -p out
 
           # Use KCONFIG_ALLCONFIG to merge your fog.config on top of the vendor defconfig
-          make O=out ARCH=arm64 vendor/fog-perf_defconfig \
+          make O=out ARCH=arm64 vendor/spes-perf_defconfig \
             KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config
 
           make -j$(nproc) O=out ARCH=arm64 \
