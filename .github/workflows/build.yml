@@ -16,15 +16,17 @@ jobs:
           sudo apt-get install -y \
             build-essential bc bison flex \
             libssl-dev libelf-dev git curl \
-            zip python3 ccache
+            zip python3 ccache wget
 
       - name: Download toolchain
         run: |
-          mkdir -p tc
-          cd tc
-          git clone --depth=1 -b 14 \
-            https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone \
-            clang
+          mkdir -p tc/clang
+          cd tc/clang
+          wget -q \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android15-release/clang-r547379.tar.gz" \
+            -O clang.tar.gz
+          tar -xzf clang.tar.gz
+          rm clang.tar.gz
 
       - name: Add namespace configs and fix CPU masks
         run: |
@@ -63,7 +65,10 @@ jobs:
             CC=clang AS=llvm-as LD=ld.lld AR=llvm-ar \
             NM=llvm-nm OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump STRIP=llvm-strip
-          make O=out ARCH=arm64 olddefconfig
+          make O=out ARCH=arm64 olddefconfig \
+            CC=clang AS=llvm-as LD=ld.lld AR=llvm-ar \
+            NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang AS=llvm-as LD=ld.lld AR=llvm-ar \
             NM=llvm-nm OBJCOPY=llvm-objcopy \
