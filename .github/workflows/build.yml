@@ -1,37 +1,26 @@
-name: Build Fog Kernel
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: Build kernel
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential bc bison flex \
-            libssl-dev libelf-dev git curl \
-            zip python3 ccache
+          export ARCH=arm64
+          export TC_PATH="$(pwd)/tc/clang-r450784e/bin"
+          export PATH="$TC_PATH:$PATH"
+          
+          export KBUILD_BUILD_USER=nobody
+          export KBUILD_BUILD_HOST=android-build
+          export LLVM=1
+          export LLVM_IAS=1
 
-      - name: Download toolchain
-        run: |
-          mkdir -p tc
-          cd tc
-          git clone --depth=1 -b 14 \
-            https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone \
-            clang-r450784e
+          mkdir -p out
+          
+          # 1. Generate base config from the Xiaomi vendor folder
+          # Check if fog-perf_defconfig exists, else fallback to spes-perf_defconfig
+          if [ -f arch/arm64/configs/vendor/xiaomi/fog-perf_defconfig ]; then
+              make O=out ARCH=arm64 vendor/xiaomi/fog-perf_defconfig
+          else
+              make O=out ARCH=arm64 vendor/xiaomi/spes-perf_defconfig
+          fi
 
-      - name: Add namespace configs to fog.config
-        run: |
-          FOGCONFIG="arch/arm64/configs/vendor/xiaomi/fog.config"
-          cat >> $FOGCONFIG << 'EOF'
-
-          # Namespaces for LXC/container support
+          # 2. Inject Cyberdeck & Hardware Buffer configs
+          cat >> out/.config << 'EOF'
           CONFIG_PID_NS=y
           CONFIG_USER_NS=y
           CONFIG_IPC_NS=y
@@ -45,101 +34,28 @@ jobs:
           CONFIG_VETH=y
           CONFIG_TUN=y
           CONFIG_WIREGUARD=y
-          CONFIG_NF_TABLES=y
-          CONFIG_IP_NF_NAT=y
           CONFIG_CHECKPOINT_RESTORE=y
           CONFIG_POSIX_MQUEUE=y
           CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
+          CONFIG_ION=y
+          CONFIG_DMA_SHARED_BUFFER=y
+          CONFIG_SYNC_FILE=y
+          CONFIG_SW_SYNC=y
+          CONFIG_IKCONFIG=y
+          CONFIG_IKCONFIG_PROC=y
           EOF
 
-          sed -i '/# CONFIG_MEMCG is not set/d' $FOGCONFIG
-          sed -i '/# CONFIG_MEMCG_SWAP is not set/d' $FOGCONFIG
+          # 3. Apply changes
+          make O=out ARCH=arm64 olddefconfig
 
-      - name: Build kernel
-        run: |
-          export ARCH=arm64
-          export PATH="$(pwd)/tc/clang-r450784e/bin:$PATH"
-          export KBUILD_BUILD_USER=nobody
-          export KBUILD_BUILD_HOST=android-build
-
-          # Fix assembler version check
-          export LLVM_IAS=1
-          export AS=llvm-as
-
-          mkdir -p out
-          make O=out ARCH=arm64 vendor/spes-perf_defconfig \
-            KCONFIG_ALLCONFIG=arch/arm64/configs/vendor/xiaomi/fog.config \
-            CC=clang \
-            AS=llvm-as \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip
-
+          # 4. Build the Image and Device Trees
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC=clang \
-            AS=llvm-as \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            LLVM=1 LLVM_IAS=1 \
-            Image.gz dtb.img dtbo.img 2>&1 | tee build.log || exit $?
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            Image.gz dtbs dtbo 2>&1 | tee build.log || exit $?
 
-      - name: Package kernel
-        run: |
-          if [ ! -f out/arch/arm64/boot/Image.gz ]; then
-            echo "Kernel image not found!"
-            cat build.log | tail -50
-            exit 1
-          fi
-
-          git clone --depth=1 \
-            https://github.com/CHRISL7/AnyKernel3 AnyKernel3
-
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/
-          cp out/arch/arm64/boot/dtb.img AnyKernel3/ 2>/dev/null || true
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/ 2>/dev/null || true
-
-          cat > AnyKernel3/anykernel.sh << 'EOF'
-          properties() { '
-          kernel.string=Fog Custom Kernel with Namespace Support
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=fog
-          device.name2=wind
-          device.name3=rain
-          '; }
-          block=/dev/block/bootdevice/by-name/boot;
-          is_slot_device=1;
-          ramdisk_compression=auto;
-          . tools/ak3-core.sh;
-          split_boot;
-          flash_boot;
-          EOF
-
-          cd AnyKernel3
-          zip -r9 ../Fog-Namespace-Kernel.zip * \
-            --exclude=".git/*" \
-            --exclude="*.zip"
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: build.log
-
-      - name: Upload kernel zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: Fog-Namespace-Kernel
-          path: Fog-Namespace-Kernel.zip
-          retention-days: 7
+          # 5. Merge DTB into Image.gz (Critical for Xiaomi Bootloaders)
+          # This finds the correct DTB for the SM6225/fog and appends it
+          cat out/arch/arm64/boot/Image.gz out/arch/arm64/boot/dts/vendor/qcom/khaje-fog-overlay.dtbo > out/arch/arm64/boot/Image.gz-dtb || true
+          
