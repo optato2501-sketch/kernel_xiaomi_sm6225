@@ -22,10 +22,9 @@ jobs:
         run: |
           mkdir -p tc/clang
           cd tc/clang
-          # Use GitHub mirror instead of googlesource
-          curl -LO "https://github.com/ZyCromerZ/Clang/releases/download/20.0.0git-20250101-release/Clang-20.0.0git-20250101.tar.gz"
-          tar -xzf Clang-20.0.0git-20250101.tar.gz
-          rm Clang-20.0.0git-20250101.tar.gz
+          curl -LO "https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20220828-release/Clang-14.0.6-20220828.tar.gz"
+          tar -xzf Clang-14.0.6-20220828.tar.gz
+          rm Clang-14.0.6-20220828.tar.gz
           echo "Clang version:"
           bin/clang --version
 
