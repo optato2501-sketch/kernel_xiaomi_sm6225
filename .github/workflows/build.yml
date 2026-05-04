@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout kernel source
         uses: actions/checkout@v4
@@ -16,62 +17,52 @@ jobs:
           sudo apt-get install -y \
             build-essential bc bison flex \
             libssl-dev libelf-dev git curl \
-            zip python3 ccache
-
-      - name: Download toolchain
-        run: |
-          mkdir -p $HOME/toolchains
-          cd $HOME/toolchains
-          # FIXED: git clone instead of broken wget URL
-          # FIXED: android13-release = Clang 14 (stable for 4.19)
-          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 -b android13-release clang
-          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android13-release gcc64
-          git clone --depth 1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 -b android13-release gcc32
-
-      - name: Add namespace configs and fix CPU masks
-        run: |
-          DEFCONFIG="arch/arm64/configs/vendor/fog-perf_defconfig"
-          sed -i '/CONFIG_LITTLE_CPU_MASK/d' $DEFCONFIG
-          sed -i '/CONFIG_BIG_CPU_MASK/d' $DEFCONFIG
-          echo 'CONFIG_LITTLE_CPU_MASK=63' >> $DEFCONFIG
-          echo 'CONFIG_BIG_CPU_MASK=192' >> $DEFCONFIG
-          echo 'CONFIG_PID_NS=y' >> $DEFCONFIG
-          echo 'CONFIG_USER_NS=y' >> $DEFCONFIG
-          echo 'CONFIG_IPC_NS=y' >> $DEFCONFIG
-          echo 'CONFIG_CGROUP_PIDS=y' >> $DEFCONFIG
-          echo 'CONFIG_CGROUP_DEVICE=y' >> $DEFCONFIG
-          echo 'CONFIG_CGROUP_PERF=y' >> $DEFCONFIG
-          echo 'CONFIG_OVERLAY_FS=y' >> $DEFCONFIG
-          echo 'CONFIG_SQUASHFS=y' >> $DEFCONFIG
-          echo 'CONFIG_SQUASHFS_XZ=y' >> $DEFCONFIG
-          echo 'CONFIG_FUSE_FS=y' >> $DEFCONFIG
-          echo 'CONFIG_VETH=y' >> $DEFCONFIG
-          echo 'CONFIG_TUN=y' >> $DEFCONFIG
-          echo 'CONFIG_WIREGUARD=y' >> $DEFCONFIG
-          echo 'CONFIG_NF_TABLES=y' >> $DEFCONFIG
-          echo 'CONFIG_IP_NF_NAT=y' >> $DEFCONFIG
-          echo 'CONFIG_CHECKPOINT_RESTORE=y' >> $DEFCONFIG
-          echo 'CONFIG_POSIX_MQUEUE=y' >> $DEFCONFIG
-          echo 'CONFIG_DEVPTS_MULTIPLE_INSTANCES=y' >> $DEFCONFIG
+            zip python3 clang lld
 
       - name: Build kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-          # FIXED: Added GCC paths so 4.19 compiles clean
-          export PATH="$HOME/toolchains/clang/clang-r450784d/bin:$HOME/toolchains/gcc64/bin:$HOME/toolchains/gcc32/bin:$PATH"
-          export CROSS_COMPILE=aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
-          export CC=clang
-          export CLANG_TRIPLE=aarch64-linux-gnu-
           export KBUILD_BUILD_USER=nobody
           export KBUILD_BUILD_HOST=android-build
+
+          # Use system clang (stable)
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+
           mkdir -p out
-          make O=out ARCH=arm64 vendor/fog-perf_defconfig
-          make O=out ARCH=arm64 olddefconfig
-          make -j$(nproc --all) O=out ARCH=arm64 \
-            CC=clang \
-            Image.gz 2>&1 | tee build.log || exit $?
+
+          # Load correct config
+          make O=out vendor/fog-perf_defconfig
+
+          # Enable your features SAFELY
+          scripts/config --file out/.config \
+            -e PID_NS \
+            -e USER_NS \
+            -e IPC_NS \
+            -e CGROUP_PIDS \
+            -e CGROUP_DEVICE \
+            -e CGROUP_PERF \
+            -e OVERLAY_FS \
+            -e SQUASHFS \
+            -e SQUASHFS_XZ \
+            -e FUSE_FS \
+            -e VETH \
+            -e TUN \
+            -e WIREGUARD \
+            -e NF_TABLES \
+            -e IP_NF_NAT \
+            -e CHECKPOINT_RESTORE \
+            -e POSIX_MQUEUE \
+            -e DEVPTS_MULTIPLE_INSTANCES
+
+          # Finalize config
+          make O=out olddefconfig
+
+          # Build everything needed
+          make -j$(nproc) O=out \
+            Image.gz dtb.img dtbo.img 2>&1 | tee build.log
 
       - name: Package kernel
         run: |
@@ -80,18 +71,18 @@ jobs:
             tail -50 build.log
             exit 1
           fi
+
           git clone --depth=1 https://github.com/CHRISL7/AnyKernel3 AnyKernel3
+
           cp out/arch/arm64/boot/Image.gz AnyKernel3/
           cp out/arch/arm64/boot/dtb.img AnyKernel3/ 2>/dev/null || true
           cp out/arch/arm64/boot/dtbo.img AnyKernel3/ 2>/dev/null || true
-          
-          # FIXED: Proper anykernel.sh structure
+
           cat > AnyKernel3/anykernel.sh << 'EOF'
           ### AnyKernel3 Ramdisk Mod Script
-          ## osm0sis @ xda-developers
           
           properties() { '
-          kernel.string=Fog Custom Kernel
+          kernel.string=Fog Custom Kernel (Namespace Enabled)
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -110,7 +101,7 @@ jobs:
           split_boot;
           flash_boot;
           EOF
-          
+
           cd AnyKernel3
           zip -r9 ../Fog-Namespace-Kernel.zip * \
             --exclude=".git/*" --exclude="*.zip"
@@ -128,4 +119,3 @@ jobs:
           name: Fog-Namespace-Kernel
           path: Fog-Namespace-Kernel.zip
           retention-days: 7
-          
